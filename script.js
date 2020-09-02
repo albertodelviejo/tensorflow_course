@@ -1,3 +1,5 @@
+var stopTraining;
+
 async function getData() {
     const datosCasasR = await fetch('https://static.platzi.com/media/public/uploads/datos-entrenamiento_15cd99ce-3561-494e-8f56-9492d4e86438.json');  
     const datosCasas = await datosCasasR.json();  
@@ -8,6 +10,57 @@ async function getData() {
     .filter(casa => (casa.precio != null && casa.cuartos != null));
     
     return datosLimpios;
+  }
+
+   //mostrar curva de inferencia()
+async function verCurvaInferencia(){
+    var data = await getData();
+    var tensorData = await convertirDatosATensores(data);
+  
+    const { entradasMax, entradasMin, etiquetasMin, etiquetasMax} = tensorData;
+  
+    const [xs, preds] = tf.tidy(() => {
+      const xs = tf.linspace(0,1,100);
+      const preds = modelo.predict(xs.reshape([100,1]));
+  
+      const desnormX = xs
+        .mul(entradasMax.sub(entradasMin))
+        .add(entradasMin)
+      
+        const desnormY = preds
+        .mul(etiquetasMax.sub(etiquetasMin))
+        .add(etiquetasMin)
+  
+        return [desnormX.dataSync(), desnormY.dataSync()];
+  
+    });
+  
+    const puntosPrediccion = Array.from(xs).map((val, i) => {
+      return {x: val, y: preds[i]}
+    });
+  
+    const puntosOriginales = data.map(d => ({
+      x: d.cuartos, y: d.precio,
+    }));
+  
+    tfvis.render.scatterplot(
+      { name: 'Prediccion vs Originales' },
+      { values: [puntosOriginales, puntosPrediccion], series: ['originales','predicciones']},
+      {
+        xLabel: 'Cuartos',
+        yLabel: 'Precio',
+        height: 300,
+        width: 300
+      }
+    );
+  
+  }
+
+  async function cargarModelo(){
+      const uploadJSONInput = document.getElementById('upload-json');
+      const uploadWeightsInput = document.getElementById('upload-weights');
+      modelo = await tf.loadLayersModel(tf.io.browserFiles([uploadJSONInput.files[0], uploadWeightsInput.files[0]]));
+      console.log("Modelo cargado");
   }
   
   function visualizarDatos(data){
@@ -39,6 +92,47 @@ function crearModelo(){
   return modelo;
 }
 
+const optimizador = tf.train.adam();
+const funcion_perdida = tf.losses.meanSquaredError;
+const metricas = ['mse'];
+
+async function entrenarModelo(model, inputs, labels) {
+
+    model.compile({
+        optimizer: optimizador,
+        loss: funcion_perdida,
+        metrics: metricas,
+    });
+
+    const surface = {name: 'show.history live', tab:'Training'};
+    const tamanioBatch = 28;
+    const epochs = 50;
+    const history = [];
+    return await model.fit(inputs, labels, {
+        tamanioBatch,
+        epochs,
+        shuffle: true,
+        callbacks: {
+            onEpochEnd: (epoch, log) => {
+                history.push(log);
+                tfvis.show.history(surface, history, ['loss', 'mse']);
+                if(stopTraining){
+                    modelo.stopTraining = true;
+                }
+            }
+        }
+    });
+}
+
+
+//Almacenar el modelo
+async function guardarModelo(){
+    const saveResult = await modelo.save('downloads://modelo-regresion')
+}
+
+
+
+
 function convertirDatosATensores(data){
     return tf.tidy(() => {
 
@@ -69,17 +163,21 @@ function convertirDatosATensores(data){
     });
 }
 
+var modelo;
+
 async function run() {
 
     const data = await getData();
 
     visualizarDatos(data);
 
-    crearModelo();
+    modelo = crearModelo();
 
     const tensorData = convertirDatosATensores(data);
     const {entradas, etiquetas} = tensorData;
-    
+    entrenarModelo(modelo, entradas, etiquetas);
+
+
 }
 
 run();
